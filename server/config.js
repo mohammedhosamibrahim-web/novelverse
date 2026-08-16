@@ -10,6 +10,8 @@ const config = {
   isProd,
   isTest,
   port: parseInt(process.env.PORT || '3000', 10),
+  // 'sqlite' (default) | 'pg' (Vercel — needs DATABASE_URL)
+  dbDriver: process.env.DB_DRIVER === 'pg' ? 'pg' : 'sqlite',
   jwtSecret: process.env.JWT_SECRET || (isTest ? 'test-secret' : 'dev-secret-CHANGE-ME'),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
   dbPath: path.resolve(process.env.DB_PATH || path.join(__dirname, '..', 'data', 'app.db')),

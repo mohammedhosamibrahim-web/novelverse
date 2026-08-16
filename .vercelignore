@@ -1,0 +1,20 @@
+# Local data must never be uploaded (SQLite DB + image cache)
+data/
+
+# Source code is not needed by the serverless build (client/dist is prebuilt)
+client/src/
+client/public/
+client/index.html
+vite.config.js
+postcss.config.js
+tailwind.config.js
+
+# Secrets / local config
+.env
+.env.*
+!*.example
+
+# Tooling & docs
+scripts/
+*.md
+node_modules/

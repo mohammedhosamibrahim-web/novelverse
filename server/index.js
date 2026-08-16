@@ -9,6 +9,7 @@ const fs = require('fs');
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const config = require('./config');
+const { dbReady } = require('./db');
 const { apiLimiter, authLimiter } = require('./middleware/rateLimit');
 const { csrfProtect } = require('./middleware/csrf');
 const { proxyImageUrl } = require('./services/imageProxy');
@@ -64,13 +65,15 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Scheduled MangaDex sync (disabled in tests) — cron-style background jobs:
+// Scheduled MangaDex sync — cron-style background jobs (SKIPPED on Vercel:
+// serverless functions are stateless, so timers only live while a request
+// runs; Vercel Cron is the replacement there — see README):
 //  - 'full'    every MANGADEX_SYNC_INTERVAL_MS (default 3h): refresh pass
 //  - 'ongoing' every MANGADEX_ONGOING_INTERVAL_MS (default 30min): pull new
 //              chapters on ongoing series as they are uploaded
 //  - 'daily'   every MANGADEX_DAILY_INTERVAL_MS (default 24h): bulk pull of
 //              50–100 NEW works with all their chapters
-if (config.mangadex.syncEnabled && !config.isTest) {
+function startSchedulers() {
   const run = (mode) => {
     mangadex
       .runSync(mode)
@@ -95,8 +98,26 @@ if (config.mangadex.syncEnabled && !config.isTest) {
   );
 }
 
-const server = app.listen(config.port, () => {
-  console.log(`[server] listening on :${config.port} (env=${process.env.NODE_ENV || 'development'})`);
-});
+module.exports = { app };
 
-module.exports = { app, server };
+if (process.env.VERCEL) {
+  // Serverless: only export the handler once the DB is ready. Requests that
+  // arrive before readiness are queued by the platform (initial cold start).
+  dbReady.catch((e) => {
+    console.error('[server] db init failed:', e.message);
+  });
+} else {
+  module.exports.ready = dbReady
+    .then(() => {
+      if (config.mangadex.syncEnabled && !config.isTest) startSchedulers();
+      const server = app.listen(config.port, () => {
+        console.log(`[server] listening on :${config.port} (env=${process.env.NODE_ENV || 'development'})`);
+      });
+      module.exports.server = server;
+      return server;
+    })
+    .catch((e) => {
+      console.error('[server] db init failed:', e.message);
+      process.exit(1);
+    });
+}

@@ -39,9 +39,9 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Active API base — switches to the configured alternative source when the
  *  admin enables the Alternative API toggle (any MangaDex-compatible API). */
-function apiBase() {
-  if (getSetting('content_source', 'mangadex') === 'alternative') {
-    const alt = getSetting('alt_api_base', '');
+async function apiBase() {
+  if ((await getSetting('content_source', 'mangadex')) === 'alternative') {
+    const alt = await getSetting('alt_api_base', '');
     if (alt && alt.trim()) return alt.trim().replace(/\/+$/, '');
   }
   return API;
@@ -50,7 +50,7 @@ function apiBase() {
 /** MangaDex API request with retries for transient network errors/5xx.
  *  Base URL follows the admin's content-source switch. */
 async function mdFetch(path, retries = 3) {
-  const base = apiBase();
+  const base = await apiBase();
   for (let attempt = 0; attempt <= retries; attempt++) {
     let res;
     try {
@@ -150,8 +150,8 @@ async function getTopRated(limit = 50, offset = 0) {
   return data.data || [];
 }
 
-function upsertManga(md) {
-  const existing = db.prepare('SELECT id FROM manga WHERE mangadex_id = ?').get(md.id);
+async function upsertManga(md) {
+  const existing = await db.prepare('SELECT id FROM manga WHERE mangadex_id = ?').get(md.id);
   const record = {
     mangadex_id: md.id,
     title: firstTitle(md),
@@ -164,15 +164,17 @@ function upsertManga(md) {
     last_sync_at: new Date().toISOString(),
   };
   if (existing) {
-    db.prepare(
-      `UPDATE manga SET title=@title, alt_titles=@alt_titles, description=@description,
-       cover_url=@cover_url, author=@author, status=@status, year=@year, last_sync_at=@last_sync_at,
-       provider='mangadex', provider_id=@mangadex_id
-       WHERE id=@id`
-    ).run({ ...record, id: existing.id });
+    await db
+      .prepare(
+        `UPDATE manga SET title=@title, alt_titles=@alt_titles, description=@description,
+         cover_url=@cover_url, author=@author, status=@status, year=@year, last_sync_at=@last_sync_at,
+         provider='mangadex', provider_id=@mangadex_id
+         WHERE id=@id`
+      )
+      .run({ ...record, id: existing.id });
     return existing.id;
   }
-  const info = db
+  const info = await db
     .prepare(
       `INSERT INTO manga (mangadex_id, title, alt_titles, description, cover_url, author, status, year, last_sync_at, provider, provider_id)
        VALUES (@mangadex_id, @title, @alt_titles, @description, @cover_url, @author, @status, @year, @last_sync_at, 'mangadex', @mangadex_id)`
@@ -208,7 +210,7 @@ async function syncMangaChapters(mangaId, mangadexId, lang = 'en') {
     if (batch.length === 0) break;
     for (const ch of batch) {
       const attrs = ch.attributes || {};
-      upsert.run(
+      await upsert.run(
         mangaId,
         parseFloat(attrs.chapter) || 0,
         attrs.title || '',
@@ -232,7 +234,7 @@ async function syncMangaChapters(mangaId, mangadexId, lang = 'en') {
  * Returns the page entries, or null when the chapter cannot be resolved.
  */
 async function resolveChapterPages(chapterId) {
-  const chapter = db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(chapterId);
+  const chapter = await db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(chapterId);
   if (!chapter || !chapter.md_chapter_id) return null;
   let home;
   try {
@@ -244,7 +246,7 @@ async function resolveChapterPages(chapterId) {
   const filenames = home.chapter.dataSaver && home.chapter.dataSaver.length ? home.chapter.dataSaver : home.chapter.data || [];
   const pages = filenames.map((f) => ({ h: home.chapter.hash, f, b: home.baseUrl }));
   if (pages.length === 0) return null;
-  db.prepare('UPDATE manga_chapters SET pages_json = ? WHERE id = ?').run(JSON.stringify(pages), chapterId);
+  await db.prepare('UPDATE manga_chapters SET pages_json = ? WHERE id = ?').run(JSON.stringify(pages), chapterId);
   return pages;
 }
 
@@ -264,8 +266,8 @@ function normalizePages(pagesJson) {
   }).filter(Boolean);
 }
 
-function mangaExists(mdId) {
-  return !!db.prepare('SELECT 1 FROM manga WHERE mangadex_id = ?').get(mdId);
+async function mangaExists(mdId) {
+  return !!(await db.prepare('SELECT 1 FROM manga WHERE mangadex_id = ?').get(mdId));
 }
 
 /** Sync chapter metadata for ALL configured languages (en + ar by default). */
@@ -290,7 +292,7 @@ async function fetchPages(kind, pages, perPage, pace) {
 }
 
 /** Existing manga to refresh — ongoing/hiatus first, then oldest-synced. */
-function refreshCandidates(limit) {
+async function refreshCandidates(limit) {
   return db
     .prepare(
       `SELECT id, mangadex_id FROM manga WHERE mangadex_id IS NOT NULL
@@ -376,8 +378,8 @@ async function runSync(mode = 'full', opts = {}) {
     // ── phase 1: NEW works with all chapters ──────────────────────
     for (const md of lists) {
       if (newManga >= newCap) break;
-      if (mangaExists(md.id)) continue;
-      const localId = upsertManga(md);
+      if (await mangaExists(md.id)) continue;
+      const localId = await upsertManga(md);
       chaptersSynced += await syncAllLangs(localId, md.id);
       newManga += 1;
       mangaSynced += 1;
@@ -390,19 +392,19 @@ async function runSync(mode = 'full', opts = {}) {
     let listRefreshed = 0;
     for (const md of lists) {
       if (listRefreshed >= inListRefresh) break;
-      if (!mangaExists(md.id)) continue;
-      const localId = db.prepare('SELECT id FROM manga WHERE mangadex_id = ?').get(md.id).id;
-      chaptersSynced += await syncAllLangs(localId, md.id);
-      db.prepare('UPDATE manga SET last_sync_at = ? WHERE id = ?').run(new Date().toISOString(), localId);
+      if (!(await mangaExists(md.id))) continue;
+      const row = await db.prepare('SELECT id FROM manga WHERE mangadex_id = ?').get(md.id);
+      chaptersSynced += await syncAllLangs(row.id, md.id);
+      await db.prepare('UPDATE manga SET last_sync_at = ? WHERE id = ?').run(new Date().toISOString(), row.id);
       listRefreshed += 1;
       refreshed += 1;
       tick(md.attributes && firstTitle(md));
       await delay(pace);
     }
     // (b) ongoing/hiatus batch from the DB (priority refresh)
-    for (const m of refreshCandidates(dbBatch)) {
+    for (const m of await refreshCandidates(dbBatch)) {
       chaptersSynced += await syncAllLangs(m.id, m.mangadex_id);
-      db.prepare('UPDATE manga SET last_sync_at = ? WHERE id = ?').run(new Date().toISOString(), m.id);
+      await db.prepare('UPDATE manga SET last_sync_at = ? WHERE id = ?').run(new Date().toISOString(), m.id);
       refreshed += 1;
       tick(m.id);
       await delay(pace);
@@ -429,19 +431,18 @@ async function runSync(mode = 'full', opts = {}) {
   }
 }
 
-function getSyncStatus() {
+async function getSyncStatus() {
+  const count = async (sql) => Number((await db.prepare(sql).get()).n) || 0;
   return {
     ...syncStatus,
-    activeSource: getSetting('content_source', 'mangadex'),
-    altApiBase: getSetting('alt_api_base', ''),
-    mangaCount: db.prepare('SELECT COUNT(*) AS n FROM manga').get().n,
-    chapterCount: db.prepare('SELECT COUNT(*) AS n FROM manga_chapters').get().n,
-    chaptersWithPages: db
-      .prepare("SELECT COUNT(*) AS n FROM manga_chapters WHERE pages_json != '[]' AND pages_json IS NOT NULL")
-      .get().n,
-    ongoingCount: db
-      .prepare("SELECT COUNT(*) AS n FROM manga WHERE status IN ('ongoing','hiatus')")
-      .get().n,
+    activeSource: await getSetting('content_source', 'mangadex'),
+    altApiBase: await getSetting('alt_api_base', ''),
+    mangaCount: await count('SELECT COUNT(*) AS n FROM manga'),
+    chapterCount: await count('SELECT COUNT(*) AS n FROM manga_chapters'),
+    chaptersWithPages: await count(
+      "SELECT COUNT(*) AS n FROM manga_chapters WHERE pages_json != '[]' AND pages_json IS NOT NULL"
+    ),
+    ongoingCount: await count("SELECT COUNT(*) AS n FROM manga WHERE status IN ('ongoing','hiatus')"),
   };
 }
 

@@ -6,6 +6,7 @@
  *
  * Providers are config-driven (server/config/mirror-sources.json): any
  * manga-reading site can be added with CSS selectors + its image CDN host.
+ * Enable/disable lives in the sources table (admin toggles, id 'mirror:<id>').
  * Each chapter's resolved image list is cached in
  * `manga_chapters.mirror_pages_json` (scraped once per chapter).
  */
@@ -16,8 +17,17 @@ const { db } = require('../db');
 const config = require('../config');
 
 const SOURCES_FILE = path.join(__dirname, '..', 'config', 'mirror-sources.json');
-const providers = (JSON.parse(fs.readFileSync(SOURCES_FILE, 'utf8')).providers || []).filter((p) => p.enabled);
+const mirrorConfigs = JSON.parse(fs.readFileSync(SOURCES_FILE, 'utf8')).providers || [];
 const UA = config.mangadex.imageUserAgent;
+
+async function enabledProviders() {
+  const out = [];
+  for (const p of mirrorConfigs) {
+    const row = await db.prepare('SELECT enabled FROM sources WHERE id = ?').get(`mirror:${p.id}`);
+    if (row ? !!row.enabled : !!p.enabled) out.push(p);
+  }
+  return out;
+}
 
 async function fetchHtml(url) {
   const res = await fetch(url, {
@@ -75,7 +85,7 @@ async function providerChapterImages(provider, title, chapterNumber) {
 
 /** Resolve + cache a chapter's ordered image URLs (providers in order). */
 async function getChapterImages(chapterId) {
-  const chapter = db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(chapterId);
+  const chapter = await db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(chapterId);
   if (!chapter) return null;
 
   if (chapter.mirror_pages_json && chapter.mirror_pages_json !== '[]') {
@@ -85,14 +95,14 @@ async function getChapterImages(chapterId) {
       /* re-resolve */
     }
   }
-  const manga = db.prepare('SELECT title FROM manga WHERE id = ?').get(chapter.manga_id);
+  const manga = await db.prepare('SELECT title FROM manga WHERE id = ?').get(chapter.manga_id);
   if (!manga || !manga.title) return null;
 
-  for (const provider of providers) {
+  for (const provider of await enabledProviders()) {
     try {
       const imgs = await providerChapterImages(provider, manga.title, chapter.chapter_number);
       if (imgs) {
-        db.prepare('UPDATE manga_chapters SET mirror_pages_json = ? WHERE id = ?').run(JSON.stringify(imgs), chapterId);
+        await db.prepare('UPDATE manga_chapters SET mirror_pages_json = ? WHERE id = ?').run(JSON.stringify(imgs), chapterId);
         return imgs;
       }
     } catch {
@@ -110,12 +120,14 @@ async function fetchMirrorImage(url) {
       redirect: 'follow',
     });
     if (!res.ok) return null;
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    if (!ct.startsWith('image/')) return null; // HTML challenge page → not an image
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length < 100) return null;
-    return { buf, type: res.headers.get('content-type') || 'image/jpeg' };
+    return { buf, type: ct || 'image/jpeg' };
   } catch {
     return null;
   }
 }
 
-module.exports = { getChapterImages, fetchMirrorImage, providers };
+module.exports = { getChapterImages, fetchMirrorImage, enabledProviders, mirrorConfigs };

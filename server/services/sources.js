@@ -7,32 +7,25 @@
  * order; the image proxy and sync code fall back to the next provider
  * automatically (see routes/reader.js fetchUpstream + the IMAGE_FALLBACK_PROXY
  * / alt_api_base admin settings).
- *
- * Note (2026): several public providers targeted by this project are closed —
- * Consumet (DMCA, HTTP 451), ComicK public API (now serves its SPA only),
- * MangaFeed (never a public API). They stay registered (disabled) so they
- * activate automatically the moment an endpoint returns.
  */
 const { db } = require('../db');
 const config = require('../config');
 
 const HEALTH_PING_MS = 6000;
 
-function listSources() {
-  return db.prepare('SELECT * FROM sources ORDER BY priority ASC, id ASC').all().map((s) => ({
-    ...s,
-    enabled: !!s.enabled,
-  }));
+async function listSources() {
+  const rows = await db.prepare('SELECT * FROM sources ORDER BY priority ASC, id ASC').all();
+  return rows.map((s) => ({ ...s, enabled: !!s.enabled }));
 }
 
-function setSource(id, { enabled, priority } = {}) {
-  const src = db.prepare('SELECT * FROM sources WHERE id = ?').get(id);
+async function setSource(id, { enabled, priority } = {}) {
+  const src = await db.prepare('SELECT * FROM sources WHERE id = ?').get(id);
   if (!src) return null;
-  if (enabled !== undefined) db.prepare('UPDATE sources SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
+  if (enabled !== undefined) await db.prepare('UPDATE sources SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
   if (priority !== undefined) {
     const p = parseInt(priority, 10);
     if (!Number.isFinite(p) || p < 1 || p > 100) throw new Error('priority must be 1–100');
-    db.prepare('UPDATE sources SET priority = ? WHERE id = ?').run(p, id);
+    await db.prepare('UPDATE sources SET priority = ? WHERE id = ?').run(p, id);
   }
   return db.prepare('SELECT * FROM sources WHERE id = ?').get(id);
 }
@@ -52,11 +45,11 @@ async function ping(url, init = {}) {
 }
 
 /** Persist + return a source's health entry. */
-function classify(sourceId, result, baseStatus) {
+async function classify(sourceId, result, baseStatus) {
   const latency = result.latencyMs || 0;
   let status = baseStatus;
   if (result.ok && baseStatus === 'ok' && latency > 3000) status = 'slow';
-  db.prepare('UPDATE sources SET status = ?, latency_ms = ?, last_check = ? WHERE id = ?').run(
+  await db.prepare('UPDATE sources SET status = ?, latency_ms = ?, last_check = ? WHERE id = ?').run(
     status,
     latency,
     new Date().toISOString(),
@@ -76,7 +69,6 @@ async function checkSource(id) {
       return classify(id, r, r.ok && r.status === 200 ? 'ok' : 'down');
     }
     case 'comick': {
-      // API mode closed (SPA HTML) — the site itself is reachable → degraded
       const r = await ping('https://comick.io/', { fetchInit: { headers: { 'User-Agent': ua } } });
       return classify(id, r, r.ok ? 'degraded' : 'down');
     }
@@ -100,17 +92,26 @@ async function checkSource(id) {
     }
     case 'mangaupdates': {
       const r = await ping('https://api.mangaupdates.com/', { fetchInit: { headers: { 'User-Agent': ua } } });
-      // 2xx/4xx means the API host is reachable (some endpoints need keys)
       return classify(id, r, r.ok && r.status < 500 ? 'ok' : 'down');
     }
-    default:
+    default: {
+      // mirror:* providers — ping their configured base URL
+      if (id.startsWith('mirror:')) {
+        const mirror = require('./mirrorManga');
+        const p = mirror.mirrorConfigs.find((x) => `mirror:${x.id}` === id);
+        if (p) {
+          const r = await ping(p.baseUrl, { fetchInit: { headers: { 'User-Agent': ua } } });
+          return classify(id, r, r.ok ? 'ok' : 'down');
+        }
+      }
       return classify(id, { ok: false, latencyMs: 0 }, 'unknown');
+    }
   }
 }
 
 /** Run health checks for all sources and persist results. */
 async function checkAll() {
-  for (const s of listSources()) {
+  for (const s of await listSources()) {
     await checkSource(s.id);
   }
   return listSources();

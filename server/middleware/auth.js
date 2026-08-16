@@ -10,7 +10,7 @@ function signToken(user) {
   return jwt.sign({ id: user.id }, config.jwtSecret, { expiresIn: config.jwtExpiresIn });
 }
 
-function loadUser(id) {
+async function loadUser(id) {
   return db
     .prepare('SELECT id, username, email, role, created_at FROM users WHERE id = ?')
     .get(id);
@@ -33,12 +33,12 @@ function clearAuthCookies(res) {
 
 /** Require a valid session. Role is loaded fresh from the DB on every
  *  request so admin role changes take effect immediately. */
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const token = req.cookies && req.cookies.token;
   if (!token) return res.status(401).json({ error: 'Authentication required' });
   try {
     const payload = jwt.verify(token, config.jwtSecret);
-    const user = loadUser(payload.id);
+    const user = await loadUser(payload.id);
     if (!user) throw new Error('user not found');
     req.user = user;
     next();
@@ -48,12 +48,12 @@ function requireAuth(req, res, next) {
 }
 
 /** Attach req.user when a session exists; anonymous requests pass through. */
-function optionalAuth(req, res, next) {
+async function optionalAuth(req, res, next) {
   const token = req.cookies && req.cookies.token;
   if (!token) return next();
   try {
     const payload = jwt.verify(token, config.jwtSecret);
-    req.user = loadUser(payload.id) || undefined;
+    req.user = (await loadUser(payload.id)) || undefined;
   } catch {
     /* ignore invalid token */
   }

@@ -61,7 +61,7 @@ async function chapterPayload(chapter, userId, ip) {
     return { error: 'noPages' };
   }
 
-  const download = downloadLimiter.recordDownload(userId, ip, `manga:${chapter.id}`, 'manga');
+  const download = await downloadLimiter.recordDownload(userId, ip, `manga:${chapter.id}`, 'manga');
   const pageUrls = pages.map((_, index) => ({ index, url: `/api/reader/image/${chapter.id}/${index}` }));
 
   // at-home details: base URL, hash and the full list of page filenames.
@@ -85,7 +85,7 @@ async function chapterPayload(chapter, userId, ip) {
  */
 router.get('/manga/:mangaId/chapters/:chapterId/pages', optionalAuth, async (req, res, next) => {
   try {
-    const chapter = db
+    const chapter = await db
       .prepare('SELECT * FROM manga_chapters WHERE id = ? AND manga_id = ?')
       .get(req.params.chapterId, req.params.mangaId);
     if (!chapter) return res.status(404).json({ error: 'Chapter not found' });
@@ -107,7 +107,7 @@ router.get('/manga/:mangaId/chapters/:chapterId/pages', optionalAuth, async (req
  */
 router.get('/chapter/:chapterId', optionalAuth, async (req, res, next) => {
   try {
-    const chapter = db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(req.params.chapterId);
+    const chapter = await db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(req.params.chapterId);
     if (!chapter) return res.status(404).json({ error: 'Chapter not found' });
     const payload = await chapterPayload(chapter, req.user ? req.user.id : null, clientIp(req));
     if (payload.error === 'noPages') {
@@ -133,7 +133,7 @@ router.get('/novels/:novelId/chapters/:index', optionalAuth, async (req, res, ne
     if (!chapter) return res.status(404).json({ error: 'Chapter not found' });
 
     const userId = req.user ? req.user.id : null;
-    const download = downloadLimiter.recordDownload(userId, clientIp(req), `novel:${chapter.id}`, 'novel');
+    const download = await downloadLimiter.recordDownload(userId, clientIp(req), `novel:${chapter.id}`, 'novel');
 
     let content = chapter.content;
     if (!chapter.fetched_at) {
@@ -159,7 +159,7 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
  */
 router.get('/chapters/:chapterId/download', requireAuth, async (req, res, next) => {
   try {
-    const chapter = db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(req.params.chapterId);
+    const chapter = await db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(req.params.chapterId);
     if (!chapter) return res.status(404).json({ error: 'Chapter not found' });
 
     let pages = mangadex.normalizePages(chapter.pages_json);
@@ -172,7 +172,7 @@ router.get('/chapters/:chapterId/download', requireAuth, async (req, res, next) 
     }
 
     // daily limit (11/day + rewarded +5) — throws LimitReachedError on 429
-    const download = downloadLimiter.recordDownload(req.user.id, clientIp(req), `manga:${chapter.id}`, 'manga');
+    const download = await downloadLimiter.recordDownload(req.user.id, clientIp(req), `manga:${chapter.id}`, 'manga');
 
     // collect page images (quick mode: fail fast when CDN rate-limits us)
     const pad = (n) => String(n + 1).padStart(3, '0');
@@ -192,7 +192,7 @@ router.get('/chapters/:chapterId/download', requireAuth, async (req, res, next) 
       }
       // mirror CDN fallback for the page
       if (!img) {
-        const mirrorSrc = db.prepare("SELECT enabled FROM sources WHERE id = 'mangapill'").get();
+        const mirrorSrc = await db.prepare("SELECT enabled FROM sources WHERE id = 'mangapill'").get();
         if (mirrorSrc && mirrorSrc.enabled) {
           try {
             const mirrorPages = await mirrorManga.getChapterImages(chapter.id);
@@ -288,7 +288,7 @@ async function fetchUpstream(url, quick = false) {
     // attempt 2 — optional fallback proxy (admin-configurable template with
     // {url}), e.g. a Consumet-style endpoint or your own mirror. Result is
     // cached under the ORIGINAL MangaDex URL so re-reads never hit it again.
-    const fallbackProxy = getSetting('image_fallback_proxy', config.imageFallbackProxy);
+    const fallbackProxy = await getSetting('image_fallback_proxy', config.imageFallbackProxy);
     if (fallbackProxy) {
       const fbUrl = fallbackProxy.replace('{url}', encodeURIComponent(url));
       const fb = await attemptFetch(fbUrl);
@@ -315,7 +315,9 @@ async function fetchUpstream(url, quick = false) {
 
 /** Single fetch attempt → {buf,type} | {status} | null (network error).
  *  Sends the MangaDex-required headers: browser-like User-Agent and
- *  Referer: https://mangadex.org/. */
+ *  Referer: https://mangadex.org/. Rejects non-image responses (MangaDex's
+ *  CDN answers 200 with an HTML rate-limit page when an IP is throttled —
+ *  serving that HTML as an image must never happen). */
 async function attemptFetch(url) {
   try {
     const upstream = await fetch(url, {
@@ -326,10 +328,12 @@ async function attemptFetch(url) {
       redirect: 'follow',
     });
     if (upstream.ok) {
+      const ct = (upstream.headers.get('content-type') || '').toLowerCase();
+      if (!ct.startsWith('image/')) return { status: 415 }; // not an image
       const buf = Buffer.from(await upstream.arrayBuffer());
       if (buf.length < 100) return null;
       imageCache.set(url, buf);
-      return { buf, type: upstream.headers.get('content-type') || 'image/jpeg' };
+      return { buf, type: ct || 'image/jpeg' };
     }
     return { status: upstream.status };
   } catch {
@@ -348,7 +352,7 @@ async function attemptFetch(url) {
  */
 router.get('/image/:chapterId/:index', imageLimiter, async (req, res) => {
   try {
-    const chapter = db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(req.params.chapterId);
+    const chapter = await db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(req.params.chapterId);
     if (!chapter) return res.status(404).json({ error: 'Chapter not found' });
     const index = parseInt(req.params.index, 10);
     const pages = mangadex.normalizePages(chapter.pages_json);
@@ -385,7 +389,7 @@ router.get('/image/:chapterId/:index', imageLimiter, async (req, res) => {
     }
 
     // 5: mirror CDN fallback (mangapill provider — enabled via sources registry)
-    const mirrorSrc = db.prepare("SELECT enabled FROM sources WHERE id = 'mangapill'").get();
+    const mirrorSrc = await db.prepare("SELECT enabled FROM sources WHERE id = 'mangapill'").get();
     if (mirrorSrc && mirrorSrc.enabled) {
       try {
         const mirrorPages = await mirrorManga.getChapterImages(chapter.id);
@@ -421,15 +425,19 @@ function sendImage(res, img) {
 }
 
 /** GET /api/downloads/status — current allowance for the caller. */
-router.get('/downloads/status', optionalAuth, (req, res) => {
-  res.json({ download: downloadLimiter.status(req.user ? req.user.id : null, clientIp(req)) });
+router.get('/downloads/status', optionalAuth, async (req, res, next) => {
+  try {
+    res.json({ download: await downloadLimiter.status(req.user ? req.user.id : null, clientIp(req)) });
+  } catch (err) {
+    next(err);
+  }
 });
 
 /** POST /api/downloads/reward — user watched the rewarded ad → grant token. */
-router.post('/downloads/reward', optionalAuth, (req, res, next) => {
+router.post('/downloads/reward', optionalAuth, async (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Login required to earn extra downloads' });
   try {
-    res.json(downloadLimiter.createRewardToken(req.user.id));
+    res.json(await downloadLimiter.createRewardToken(req.user.id));
   } catch (err) {
     if (err.code === 'AD_SLOT_DISABLED') {
       return res.status(400).json({ error: err.message, code: err.code });
@@ -439,12 +447,12 @@ router.post('/downloads/reward', optionalAuth, (req, res, next) => {
 });
 
 /** POST /api/downloads/redeem — redeem a grant token for +5 downloads. */
-router.post('/downloads/redeem', optionalAuth, (req, res, next) => {
+router.post('/downloads/redeem', optionalAuth, async (req, res, next) => {
   if (!req.user) return res.status(401).json({ error: 'Login required' });
   try {
     const token = String(req.body.token || '');
     if (!token) return res.status(400).json({ error: 'Missing token' });
-    res.json({ download: downloadLimiter.redeemReward(req.user.id, token) });
+    res.json({ download: await downloadLimiter.redeemReward(req.user.id, token) });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

@@ -9,8 +9,10 @@ process.env.DB_PATH = process.env.DB_PATH || `/tmp/wnp-smoke-api-${Date.now()}.d
 process.env.PORT = process.env.PORT || '3199';
 process.env.MANGADEX_SYNC = 'false';
 
-const { server } = require('../server/index');
+const idx = require('../server/index');
 const BASE = `http://localhost:${process.env.PORT}`;
+
+let server = null;
 
 let failures = 0;
 function check(cond, label) {
@@ -52,6 +54,9 @@ async function req(method, path, body, { csrf = true } = {}) {
 }
 
 async function main() {
+  await idx.ready; // async boot: DB init + listen complete
+  server = idx.server;
+
   console.log('— CSRF bootstrap —');
   const csrf = await req('GET', '/api/auth/csrf');
   check(csrf.status === 200 && csrf.json.csrfToken && jar.csrf === csrf.json.csrfToken, 'GET /api/auth/csrf sets cookie + token');

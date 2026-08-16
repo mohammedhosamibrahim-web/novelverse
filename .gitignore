@@ -7,3 +7,4 @@ data/
 .env
 npm-debug.log*
 .DS_Store
+server/db.js.bak

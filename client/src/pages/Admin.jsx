@@ -44,6 +44,7 @@ export default function Admin() {
           ['users', t('admin.usersTab')],
           ['ads', t('admin.adsTab')],
           ['sync', t('admin.syncTab')],
+          ['mirrors', t('admin.mirrorsTab')],
           ['sources', t('admin.sourcesTab')],
           ['settings', t('admin.settingsTab')],
         ].map(([id, label]) => (
@@ -60,6 +61,7 @@ export default function Admin() {
         {tab === 'users' && <UsersTab />}
         {tab === 'ads' && <AdsTab />}
         {tab === 'sync' && <SyncTab />}
+        {tab === 'mirrors' && <ImageSourcesTab />}
         {tab === 'sources' && <SourcesTab />}
         {tab === 'settings' && <SettingsTab />}
       </div>
@@ -223,6 +225,73 @@ function AdsTab() {
           </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ── Image Sources tab (mirror providers + fetch button) ──────────────── */
+
+function ImageSourcesTab() {
+  const { t } = useI18n();
+  const [sources, setSources] = useState([]);
+
+  const load = useCallback(() => {
+    api('/admin/sources')
+      .then((d) => setSources(d.sources.filter((s) => s.id.startsWith('mirror:'))))
+      .catch(() => {});
+  }, []);
+  useEffect(load, [load]);
+
+  const patch = async (id, body) => {
+    try {
+      await api(`/admin/sources/${id}`, { method: 'PATCH', body });
+      load();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-surface-border bg-surface-card p-5">
+        <h2 className="font-bold text-white">{t('admin.mirrorsTitle')}</h2>
+        <p className="mt-1 text-xs text-slate-500">{t('admin.mirrorsDesc')}</p>
+        <p className="mt-2 text-[11px] text-slate-500">{t('admin.mirrorsHint')}</p>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-surface-border text-xs uppercase tracking-wide text-slate-500">
+                <th className="py-2 pe-4">{t('admin.sourceTitle')}</th>
+                <th className="py-2 pe-4">{t('admin.status')}</th>
+                <th className="py-2 pe-4">{t('admin.latency')}</th>
+                <th className="py-2">{t('admin.enabled')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sources.map((s) => (
+                <tr key={s.id} className="border-b border-surface-border/50">
+                  <td className="py-2 pe-4 font-semibold text-slate-200">
+                    {s.name}
+                    <code className="ms-2 rounded bg-surface-soft px-1.5 py-0.5 text-[10px] text-accent-soft">{s.id}</code>
+                  </td>
+                  <td className="py-2 pe-4">
+                    <span className={`rounded px-2 py-0.5 text-xs font-semibold ${STATUS_BADGE[s.status] || STATUS_BADGE.unknown}`}>
+                      {t(`admin.status${s.status.charAt(0).toUpperCase()}${s.status.slice(1)}`)}
+                    </span>
+                  </td>
+                  <td className="py-2 pe-4 text-slate-400">{s.latency_ms ? `${s.latency_ms}ms` : '—'}</td>
+                  <td className="py-2">
+                    <input type="checkbox" checked={s.enabled} onChange={(e) => patch(s.id, { enabled: e.target.checked })} className="accent-indigo-500" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* fetch images button + progress */}
+      <MirrorFetchCard />
     </div>
   );
 }
@@ -639,8 +708,6 @@ function SyncTab() {
           <p className="mt-2 text-[11px] text-slate-500">{t('admin.otherSourcesNote')}</p>
         </div>
 
-        {/* Mirror image fetch (pull chapter images from external providers) */}
-        <MirrorFetchCard />
       </div>
 
       <div className="rounded-2xl border border-surface-border bg-surface-card p-5">

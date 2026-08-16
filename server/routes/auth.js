@@ -42,14 +42,14 @@ router.post('/register', async (req, res, next) => {
     if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'Invalid email address' });
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
-    const existing = db.prepare('SELECT id FROM users WHERE username = ? OR email = ?').get(username, email);
+    const existing = await db.prepare('SELECT id FROM users WHERE username = ? OR email = ?').get(username, email);
     if (existing) return res.status(409).json({ error: 'Username or email already taken' });
 
-    const userCount = db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+    const userCount = (await db.prepare('SELECT COUNT(*) AS n FROM users').get()).n;
     const role = userCount === 0 ? 'super_admin' : 'user';
 
     const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    const info = db
+    const info = await db
       .prepare('INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)')
       .run(username, email, hash, role);
     const user = { id: Number(info.lastInsertRowid), username, email, role, created_at: new Date().toISOString() };
@@ -66,7 +66,7 @@ router.post('/login', async (req, res, next) => {
   try {
     const email = cleanText(req.body.email, 254).toLowerCase();
     const password = String(req.body.password || '');
-    const row = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    const row = await db.prepare('SELECT * FROM users WHERE email = ?').get(email);
     const ok = row && (await bcrypt.compare(password, row.password_hash));
     if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
     const user = { id: row.id, username: row.username, email: row.email, role: row.role, created_at: row.created_at };

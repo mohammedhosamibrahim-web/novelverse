@@ -122,7 +122,7 @@ async function importNovel(sourceId, { tocUrl, title, coverUrl, author }) {
     throw err;
   }
   const toc = await adapter.fetchToc(tocUrl);
-  const info = db
+  const info = await db
     .prepare(
       'INSERT INTO novels (title, author, description, cover_url, source, source_id, toc_url) VALUES (?, ?, ?, ?, ?, ?, ?)'
     )
@@ -139,26 +139,26 @@ async function importNovel(sourceId, { tocUrl, title, coverUrl, author }) {
   const insertChapter = db.prepare(
     'INSERT OR IGNORE INTO novel_chapters (novel_id, chapter_index, title, url) VALUES (?, ?, ?, ?)'
   );
-  const tx = db.transaction(() => {
+  await db.transaction(async () => {
     for (const ch of toc.chapters) {
-      insertChapter.run(novelId, ch.index, ch.title, ch.url);
+      await insertChapter.run(novelId, ch.index, ch.title, ch.url);
     }
   });
-  tx();
   return { novelId, title: title || toc.title, chapterCount: toc.chapters.length };
 }
 
 /** Fetch + cache a chapter's content (network first time, DB afterwards). */
 async function getNovelChapterContent(novelChapterId, chapterUrl) {
-  const cached = db.prepare('SELECT content, fetched_at FROM novel_chapters WHERE id = ?').get(novelChapterId);
+  const cached = await db.prepare('SELECT content, fetched_at FROM novel_chapters WHERE id = ?').get(novelChapterId);
   if (cached && cached.fetched_at) return cached.content;
-  const adapter = getAdapter(
-    db.prepare('SELECT source FROM novels WHERE id = (SELECT novel_id FROM novel_chapters WHERE id = ?)').get(novelChapterId).source
-  );
+  const srcRow = await db
+    .prepare('SELECT source FROM novels WHERE id = (SELECT novel_id FROM novel_chapters WHERE id = ?)')
+    .get(novelChapterId);
+  const adapter = getAdapter(srcRow && srcRow.source);
   if (!adapter) throw Object.assign(new Error('Source unavailable'), { code: 'SOURCE_UNAVAILABLE' });
   const parsed = await adapter.fetchChapter(chapterUrl);
   const content = sanitizeContent(parsed.content);
-  db.prepare("UPDATE novel_chapters SET content = ?, fetched_at = datetime('now') WHERE id = ?").run(
+  await db.prepare("UPDATE novel_chapters SET content = ?, fetched_at = datetime('now') WHERE id = ?").run(
     content,
     novelChapterId
   );

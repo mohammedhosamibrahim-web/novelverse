@@ -29,24 +29,26 @@ async function syncAniListManga(limit = 100) {
     for (const m of res.items) {
       total += 1;
       const key = normalizeTitle(m.title);
-      // 1. enrich an existing title (any provider)
-      const existing = db.prepare('SELECT id FROM manga WHERE lower(title) = ? LIMIT 1').get(key);
+      const existing = await db.prepare('SELECT id FROM manga WHERE lower(title) = ? LIMIT 1').get(key);
       if (existing) {
-        db.prepare(
-          "UPDATE manga SET score = COALESCE(?, score), description = CASE WHEN description = '' THEN ? ELSE description END, cover_url = CASE WHEN cover_url = '' THEN ? ELSE cover_url END WHERE id = ?"
-        ).run(m.score, m.description, m.cover, existing.id);
+        await db
+          .prepare(
+            "UPDATE manga SET score = COALESCE(?, score), description = CASE WHEN description = '' THEN ? ELSE description END, cover_url = CASE WHEN cover_url = '' THEN ? ELSE cover_url END WHERE id = ?"
+          )
+          .run(m.score, m.description, m.cover, existing.id);
         enriched += 1;
         continue;
       }
-      // 2. skip if already imported from AniList
-      const dup = db
+      const dup = await db
         .prepare("SELECT 1 FROM manga WHERE provider = 'anilist' AND provider_id = ?")
         .get(String(m.id));
       if (dup) continue;
-      db.prepare(
-        `INSERT INTO manga (mangadex_id, title, alt_titles, description, cover_url, author, status, year, last_sync_at, provider, provider_id, score)
-         VALUES (NULL, ?, '[]', ?, ?, '', ?, NULL, ?, 'anilist', ?, ?)`
-      ).run(m.title, m.description, m.cover, m.status || '', new Date().toISOString(), String(m.id), m.score);
+      await db
+        .prepare(
+          `INSERT INTO manga (mangadex_id, title, alt_titles, description, cover_url, author, status, year, last_sync_at, provider, provider_id, score)
+           VALUES (NULL, ?, '[]', ?, ?, '', ?, NULL, ?, 'anilist', ?, ?)`
+        )
+        .run(m.title, m.description, m.cover, m.status || '', new Date().toISOString(), String(m.id), m.score);
       imported += 1;
     }
   }
