@@ -1,0 +1,35 @@
+{
+  "comment": "Mirror CDN providers for chapter IMAGE fallback. Add any site by copying this shape — no code changes. 'enabled' entries are tried in order when MangaDex images fail. The site's HTML structure is described by CSS selectors; images must come from the provider's own CDN host (imgHost).",
+  "providers": [
+    {
+      "id": "mangapill",
+      "name": "Mangapill (mirror CDN)",
+      "enabled": true,
+      "baseUrl": "https://mangapill.com",
+      "imgHost": "cdn.readdetectiveconan.com",
+      "search": { "url": "/search?q={q}", "itemSelector": "a[href*=\"/manga/\"]", "linkAttr": "href", "first": true },
+      "chapters": { "selector": "a[href*=\"/chapters/\"]", "linkAttr": "href", "numberPattern": "chapter-(\\d+(?:\\.\\d+)?)" },
+      "images": { "selector": "img", "attr": "src", "hosts": ["cdn.readdetectiveconan.com"] }
+    },
+    {
+      "id": "bato",
+      "name": "Bato.to",
+      "enabled": false,
+      "baseUrl": "https://bato.to",
+      "imgHost": "x.bato.to",
+      "search": { "url": "/v3/search?word={q}", "itemSelector": "a[href*=\"/series/\"]", "linkAttr": "href", "first": true },
+      "chapters": { "selector": "a[href*=\"/chapter/\"]", "linkAttr": "href", "numberPattern": "" },
+      "images": { "selector": "#image-container img", "attr": "src", "hosts": ["bato.to"] }
+    },
+    {
+      "id": "mangabuddy",
+      "name": "MangaBuddy",
+      "enabled": false,
+      "baseUrl": "https://mangabuddy.com",
+      "imgHost": "mangabuddy.com",
+      "search": { "url": "/search?q={q}", "itemSelector": "a[href*=\"/manga/\"]", "linkAttr": "href", "first": true },
+      "chapters": { "selector": "a[href*=\"/chapter/\"]", "linkAttr": "href", "numberPattern": "" },
+      "images": { "selector": "img", "attr": "src", "hosts": ["mangabuddy.com", "mangaworld"] }
+    }
+  ]
+}

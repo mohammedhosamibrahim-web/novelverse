@@ -9,6 +9,7 @@ const { db, setSetting, getSetting, getIntSetting } = require('../db');
 const { requireAuth, isSuperAdmin, ROLES } = require('../middleware/auth');
 const { cleanText } = require('../middleware/sanitize');
 const mangadex = require('../services/mangadex');
+const mirrorManga = require('../services/mirrorManga');
 const { listSources, importNovel } = require('../services/novelSync');
 const providerSources = require('../services/sources');
 const providerSync = require('../services/providerSync');
@@ -239,6 +240,46 @@ router.post('/sync-all', (req, res) => {
     started: true,
     sources: providerSources.listSources().filter((s) => s.enabled).map((s) => s.id),
   });
+});
+
+// ── Mirror image fetch (pull chapter images from external providers) ─────
+
+const mirrorState = { running: false, total: 0, done: 0, ok: 0, failed: 0, current: '' };
+
+/** POST /api/admin/mirror-fetch { mangaId } — warm mirror images for ALL chapters of a manga. */
+router.post('/mirror-fetch', (req, res) => {
+  const mangaId = parseInt(req.body.mangaId, 10);
+  if (!Number.isFinite(mangaId)) return res.status(400).json({ error: 'mangaId is required' });
+  if (mirrorState.running) return res.json({ started: false, message: 'Already running' });
+  const chapters = db.prepare('SELECT id, chapter_number FROM manga_chapters WHERE manga_id = ?').all(mangaId);
+  if (!chapters.length) return res.status(404).json({ error: 'Manga not found or has no chapters' });
+  mirrorState.running = true;
+  mirrorState.total = chapters.length;
+  mirrorState.done = 0;
+  mirrorState.ok = 0;
+  mirrorState.failed = 0;
+  mirrorState.current = '';
+  (async () => {
+    for (const ch of chapters) {
+      try {
+        const pages = await mirrorManga.getChapterImages(ch.id);
+        if (pages && pages.length) mirrorState.ok += 1;
+        else mirrorState.failed += 1;
+      } catch {
+        mirrorState.failed += 1;
+      }
+      mirrorState.done += 1;
+      mirrorState.current = `Ch. ${ch.chapter_number}`;
+    }
+    mirrorState.running = false;
+    console.log(`[mirror-fetch] manga ${mangaId}: ${mirrorState.ok} chapters with images, ${mirrorState.failed} failed`);
+  })();
+  res.json({ started: true, total: chapters.length });
+});
+
+/** GET /api/admin/mirror-fetch/status */
+router.get('/mirror-fetch/status', (req, res) => {
+  res.json(mirrorState);
 });
 
 // ── Novel import ─────────────────────────────────────────────────────────

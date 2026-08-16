@@ -227,6 +227,77 @@ function AdsTab() {
   );
 }
 
+/* ── Mirror image fetch card ──────────────────────────────────────────── */
+
+function MirrorFetchCard() {
+  const { t } = useI18n();
+  const [mangaId, setMangaId] = useState('');
+  const [state, setState] = useState(null);
+  const [msg, setMsg] = useState('');
+
+  const loadState = useCallback(() => {
+    api('/admin/mirror-fetch/status').then(setState).catch(() => {});
+  }, []);
+  useEffect(loadState, [loadState]);
+
+  const running = state?.running;
+  useEffect(() => {
+    if (!running) return undefined;
+    const interval = setInterval(loadState, 2000);
+    return () => clearInterval(interval);
+  }, [running, loadState]);
+
+  const start = async () => {
+    setMsg('');
+    try {
+      const r = await api('/admin/mirror-fetch', { method: 'POST', body: { mangaId: parseInt(mangaId, 10) } });
+      setMsg(r.started ? `${t('admin.syncStarted')} (${r.total})` : t('admin.alreadyRunning'));
+      setTimeout(loadState, 1200);
+    } catch (err) {
+      setMsg(t('admin.failed', { msg: err.message }));
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-surface-border bg-surface-card p-5">
+      <h2 className="font-bold text-white">{t('admin.mirrorTitle')}</h2>
+      <p className="mt-1 text-xs text-slate-500">{t('admin.mirrorDesc')}</p>
+      <div className="mt-3 flex gap-2">
+        <input
+          type="number"
+          min={1}
+          value={mangaId}
+          onChange={(e) => setMangaId(e.target.value)}
+          placeholder={t('admin.mirrorMangaId')}
+          className="input-field w-40"
+        />
+        <button className="btn-primary" disabled={!mangaId || running} onClick={start}>
+          {running ? t('admin.syncing') : t('admin.mirrorBtn')}
+        </button>
+      </div>
+      {running && state && (
+        <div className="mt-3">
+          <div className="h-2 w-full overflow-hidden rounded bg-surface-soft">
+            <div
+              className="h-full rounded bg-accent transition-all"
+              style={{ width: `${state.total ? Math.min(100, (state.done / state.total) * 100) : 0}%` }}
+            />
+          </div>
+          <p className="mt-2 text-xs text-slate-400">
+            {t('admin.mirrorProgress', { done: state.done, total: state.total, ok: state.ok, failed: state.failed })} · {state.current}
+          </p>
+        </div>
+      )}
+      {!running && state && state.done > 0 && (
+        <p className="mt-2 text-xs text-emerald-400">
+          {t('admin.mirrorProgress', { done: state.done, total: state.total, ok: state.ok, failed: state.failed })}
+        </p>
+      )}
+      {msg && <p className="mt-2 text-sm text-slate-300">{msg}</p>}
+    </div>
+  );
+}
+
 /* ── API sources management ───────────────────────────────────────────── */
 
 const STATUS_BADGE = {
@@ -567,6 +638,9 @@ function SyncTab() {
           </div>
           <p className="mt-2 text-[11px] text-slate-500">{t('admin.otherSourcesNote')}</p>
         </div>
+
+        {/* Mirror image fetch (pull chapter images from external providers) */}
+        <MirrorFetchCard />
       </div>
 
       <div className="rounded-2xl border border-surface-border bg-surface-card p-5">

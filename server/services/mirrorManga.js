@@ -1,21 +1,22 @@
 'use strict';
 
 /**
- * Mirror CDN image provider (Mangapill) — chapter IMAGE fallback.
- * When MangaDex at-home nodes are unreachable (rate-limited / blocked),
- * chapter pages are resolved through the Mangapill mirror (its images are
- * served from cdn.readdetectiveconan.com, a public CDN).
+ * Mirror CDN image providers — chapter IMAGE fallback when MangaDex
+ * at-home nodes are unreachable (rate-limited / blocked).
  *
- * Matching: manga title → mangapill search → chapter URL (chapter number) →
- * image list. Results are cached per chapter in `manga_chapters.mirror_pages_json`
- * so each chapter is scraped only once; image bytes are disk-cached too.
+ * Providers are config-driven (server/config/mirror-sources.json): any
+ * manga-reading site can be added with CSS selectors + its image CDN host.
+ * Each chapter's resolved image list is cached in
+ * `manga_chapters.mirror_pages_json` (scraped once per chapter).
  */
 const cheerio = require('cheerio');
+const fs = require('fs');
+const path = require('path');
 const { db } = require('../db');
 const config = require('../config');
 
-const BASE = 'https://mangapill.com';
-const IMG_HOST = 'cdn.readdetectiveconan.com';
+const SOURCES_FILE = path.join(__dirname, '..', 'config', 'mirror-sources.json');
+const providers = (JSON.parse(fs.readFileSync(SOURCES_FILE, 'utf8')).providers || []).filter((p) => p.enabled);
 const UA = config.mangadex.imageUserAgent;
 
 async function fetchHtml(url) {
@@ -27,52 +28,33 @@ async function fetchHtml(url) {
   return res.text();
 }
 
-function chapterNumberFromUrl(href) {
-  const m = href.match(/chapter-(\d+(?:\.\d+)?)/);
+function chapterNumberFromUrl(href, pattern) {
+  if (!pattern) return null;
+  const m = href.match(new RegExp(pattern));
   return m ? parseFloat(m[1]) : null;
 }
 
-async function findMangaPage(title) {
+/** Resolve one chapter's ordered image URLs using a single provider. */
+async function providerChapterImages(provider, title, chapterNumber) {
   const q = encodeURIComponent(String(title || '').replace(/[^\w\s-]/g, ' ').trim());
   if (!q) return null;
-  const $ = cheerio.load(await fetchHtml(`${BASE}/search?q=${q}`));
-  const link = $('a[href*="/manga/"]').first().attr('href');
-  return link ? BASE + link : null;
-}
-
-/** Resolve + cache the ordered image URLs for a chapter via the mirror. */
-async function getChapterImages(chapterId) {
-  const chapter = db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(chapterId);
-  if (!chapter) return null;
-
-  const cached = chapter.mirror_pages_json;
-  if (cached && cached !== '[]') {
-    try {
-      return JSON.parse(cached);
-    } catch {
-      /* re-resolve */
-    }
-  }
-
-  const manga = db.prepare('SELECT title FROM manga WHERE id = ?').get(chapter.manga_id);
-  if (!manga || !manga.title) return null;
-
-  const mangaUrl = await findMangaPage(manga.title);
-  if (!mangaUrl) return null;
+  const $ = cheerio.load(await fetchHtml(provider.baseUrl + provider.search.url.replace('{q}', q)));
+  const link = $(provider.search.itemSelector).first().attr(provider.search.linkAttr || 'href');
+  if (!link) return null;
+  const mangaUrl = link.startsWith('http') ? link : provider.baseUrl + link;
 
   const $m = cheerio.load(await fetchHtml(mangaUrl));
   const links = [];
-  $m('a[href*="/chapters/"]').each((_, el) => {
-    const h = $m(el).attr('href');
+  $m(provider.chapters.selector).each((_, el) => {
+    const h = $m(el).attr(provider.chapters.linkAttr || 'href');
     if (h && !links.includes(h)) links.push(h);
   });
   if (!links.length) return null;
 
-  // match by chapter number; fall back to the newest chapter
   let target = null;
-  const wanted = parseFloat(chapter.chapter_number) || 0;
+  const wanted = parseFloat(chapterNumber) || 0;
   for (const l of links) {
-    const n = chapterNumberFromUrl(l);
+    const n = chapterNumberFromUrl(l, provider.chapters.numberPattern);
     if (n != null && wanted > 0 && Math.abs(n - wanted) < 0.01) {
       target = l;
       break;
@@ -81,23 +63,50 @@ async function getChapterImages(chapterId) {
   if (!target) target = links[0];
   if (!target) return null;
 
-  const $c = cheerio.load(await fetchHtml(BASE + target));
+  const $c = cheerio.load(await fetchHtml(target.startsWith('http') ? target : provider.baseUrl + target));
+  const hosts = provider.images.hosts || [provider.imgHost];
   const imgs = [];
-  $c('img').each((_, el) => {
-    const src = $c(el).attr('src') || $c(el).attr('data-src') || '';
-    if (src.includes(IMG_HOST)) imgs.push(src);
+  $c(provider.images.selector).each((_, el) => {
+    const src = $c(el).attr(provider.images.attr || 'src') || $c(el).attr('data-src') || '';
+    if (hosts.some((h) => src.includes(h))) imgs.push(src);
   });
-  if (!imgs.length) return null;
+  return imgs.length ? imgs : null;
+}
 
-  db.prepare('UPDATE manga_chapters SET mirror_pages_json = ? WHERE id = ?').run(JSON.stringify(imgs), chapterId);
-  return imgs;
+/** Resolve + cache a chapter's ordered image URLs (providers in order). */
+async function getChapterImages(chapterId) {
+  const chapter = db.prepare('SELECT * FROM manga_chapters WHERE id = ?').get(chapterId);
+  if (!chapter) return null;
+
+  if (chapter.mirror_pages_json && chapter.mirror_pages_json !== '[]') {
+    try {
+      return JSON.parse(chapter.mirror_pages_json);
+    } catch {
+      /* re-resolve */
+    }
+  }
+  const manga = db.prepare('SELECT title FROM manga WHERE id = ?').get(chapter.manga_id);
+  if (!manga || !manga.title) return null;
+
+  for (const provider of providers) {
+    try {
+      const imgs = await providerChapterImages(provider, manga.title, chapter.chapter_number);
+      if (imgs) {
+        db.prepare('UPDATE manga_chapters SET mirror_pages_json = ? WHERE id = ?').run(JSON.stringify(imgs), chapterId);
+        return imgs;
+      }
+    } catch {
+      /* try next provider */
+    }
+  }
+  return null;
 }
 
 /** Fetch a mirror image with the CDN-required headers. */
 async function fetchMirrorImage(url) {
   try {
     const res = await fetch(url, {
-      headers: { 'User-Agent': UA, Referer: BASE + '/' },
+      headers: { 'User-Agent': UA, Referer: 'https://mangapill.com/' },
       redirect: 'follow',
     });
     if (!res.ok) return null;
@@ -109,4 +118,4 @@ async function fetchMirrorImage(url) {
   }
 }
 
-module.exports = { getChapterImages, fetchMirrorImage };
+module.exports = { getChapterImages, fetchMirrorImage, providers };
