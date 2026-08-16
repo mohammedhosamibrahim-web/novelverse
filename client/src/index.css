@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --reader-bg: #0f1117;
+  --reader-fg: #cbd5e1;
+  --reader-muted: #94a3b8;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-surface text-slate-300 antialiased;
+  min-height: 100vh;
+}
+
+/* ── Scrollbar ─────────────────────────────── */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #0f1117; }
+::-webkit-scrollbar-thumb { background: #2a3142; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #3b4457; }
+
+/* ── Reader themes ─────────────────────────── */
+.reader {
+  background: var(--reader-bg);
+  color: var(--reader-fg);
+  transition: background 0.25s ease, color 0.25s ease;
+}
+.reader-theme-dark { --reader-bg: #0f1117; --reader-fg: #cbd5e1; --reader-muted: #7c8aa0; }
+.reader-theme-sepia { --reader-bg: #f4ecd8; --reader-fg: #3d3226; --reader-muted: #8a7a60; }
+.reader-theme-light { --reader-bg: #fafafa; --reader-fg: #1f2937; --reader-muted: #6b7280; }
+
+.reader-content { font-size: var(--reader-font-size, 18px); line-height: 1.9; }
+.reader-content p { margin: 1em 0; }
+.reader-content h1, .reader-content h2, .reader-content h3 { color: inherit; font-weight: 700; margin: 1.2em 0 0.6em; }
+
+/* ── Spoiler comments ──────────────────────── */
+.spoiler-hidden { filter: blur(6px); cursor: pointer; user-select: none; }
+.spoiler-hidden:hover { filter: blur(3px); }
+
+/* ── Ad containers ─────────────────────────── */
+.ad-slot { overflow: hidden; }
+.ad-slot iframe, .ad-slot img, .ad-slot video { max-width: 100%; }
+.ad-slot ins { display: block; }
+
+/* ── Misc ──────────────────────────────────── */
+.line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.line-clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+.btn-primary {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-soft disabled:opacity-50;
+}
+.btn-ghost {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg border border-surface-border px-4 py-2 text-sm text-slate-300 transition hover:border-slate-500;
+}
+.input-field {
+  @apply w-full rounded-lg border border-surface-border bg-surface-soft px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-500 focus:border-accent;
+}
+
+/* ── RTL (Arabic) ──────────────────────────── */
+[dir="rtl"] body, [dir="rtl"] .reader {
+  font-family: system-ui, 'Segoe UI', Tahoma, Arial, sans-serif;
+}
+/* flip common physical-direction utilities under RTL */
+[dir="rtl"] .ml-auto { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .mr-auto { margin-right: 0; margin-left: auto; }
+[dir="rtl"] .text-left { text-align: right; }
+[dir="rtl"] .text-right { text-align: left; }
+[dir="rtl"] .space-x-2 > :not([hidden]) ~ :not([hidden]),
+[dir="rtl"] .space-x-3 > :not([hidden]) ~ :not([hidden]),
+[dir="rtl"] .space-x-4 > :not([hidden]) ~ :not([hidden]) {
+  margin-left: 0;
+}
+/* keep manga page sequences left-to-right even in RTL UI */
+[dir="rtl"] .manga-pages { direction: ltr; }

@@ -1,0 +1,23 @@
+# Render.com free-tier deployment
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: novelverse
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      # IMPORTANT: generate a strong secret once and set it explicitly
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MANGADEX_UA
+        value: WebNovelPlatform/1.0 (your-email@example.com)
+      - key: MANGADEX_SYNC_INTERVAL_MS
+        value: "21600000"
+      - key: MANGADEX_SYNC_LIMIT
+        value: "20"

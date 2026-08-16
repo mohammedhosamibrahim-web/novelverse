@@ -1,0 +1,28 @@
+{
+  "comment": "Novel source adapters. Each entry is driven entirely by CSS selectors — no code changes needed to add a new source. Disabled sources are ignored. Add your own public source by copying this shape and enabling it.",
+  "sources": [
+    {
+      "id": "example-source",
+      "name": "Example Source (disabled template)",
+      "baseUrl": "https://example.com",
+      "enabled": false,
+      "search": {
+        "url": "/search?q={query}",
+        "itemSelector": "li.book-item, .search-result .item",
+        "titleSelector": "a.title",
+        "linkSelector": "a.title",
+        "coverSelector": "img"
+      },
+      "toc": {
+        "url": "{tocUrl}",
+        "titleSelector": "h1.book-name, h1",
+        "chapterSelector": "ul.chapter-list a, #list a, .catalog a"
+      },
+      "chapter": {
+        "url": "{chapterUrl}",
+        "titleSelector": "h1, .chapter-title",
+        "contentSelector": "#chapter-content, .content, .read-content"
+      }
+    }
+  ]
+}
