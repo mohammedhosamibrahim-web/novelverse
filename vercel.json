@@ -9,8 +9,5 @@
     { "src": "/sw.js", "dest": "/client/dist/sw.js", "headers": { "Cache-Control": "no-cache" } },
     { "src": "/manifest.json", "dest": "/client/dist/manifest.json", "headers": { "Cache-Control": "no-cache" } },
     { "src": "/(.*)", "dest": "/client/dist/$1" }
-  ],
-  "functions": {
-    "api/index.js": { "maxDuration": 60 }
-  }
+  ]
 }

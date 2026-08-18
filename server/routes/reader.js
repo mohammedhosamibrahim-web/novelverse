@@ -174,11 +174,20 @@ router.get('/chapters/:chapterId/download', requireAuth, async (req, res, next) 
     // daily limit (11/day + rewarded +5) — throws LimitReachedError on 429
     const download = await downloadLimiter.recordDownload(req.user.id, clientIp(req), `manga:${chapter.id}`, 'manga');
 
-    // collect page images (quick mode: fail fast when CDN rate-limits us)
+    // collect page images (quick mode: fail fast when CDN rate-limits us).
+    // Mirror pages are resolved ONCE up-front (cached in the DB), then all
+    // page fetches run in parallel batches (bounded by the global gate).
     const pad = (n) => String(n + 1).padStart(3, '0');
-    const entries = [];
-    let failed = 0;
-    for (let i = 0; i < pages.length; i++) {
+    const mirrorSrc = await db.prepare("SELECT enabled FROM sources WHERE id = 'mangapill'").get();
+    let mirrorPages = null;
+    if (mirrorSrc && mirrorSrc.enabled) {
+      try {
+        mirrorPages = await mirrorManga.getChapterImages(chapter.id);
+      } catch {
+        mirrorPages = null;
+      }
+    }
+    const fetchPage = async (i) => {
       const entry = pages[i];
       const candidates = entry.u
         ? [entry.u]
@@ -191,23 +200,34 @@ router.get('/chapters/:chapterId/download', requireAuth, async (req, res, next) 
         if (img) break;
       }
       // mirror CDN fallback for the page
-      if (!img) {
-        const mirrorSrc = await db.prepare("SELECT enabled FROM sources WHERE id = 'mangapill'").get();
-        if (mirrorSrc && mirrorSrc.enabled) {
+      if (!img && mirrorPages) {
+        const mirrorUrl = mirrorPages[i];
+        if (mirrorUrl) {
           try {
-            const mirrorPages = await mirrorManga.getChapterImages(chapter.id);
-            const mirrorUrl = mirrorPages && mirrorPages[i];
-            if (mirrorUrl) {
-              const cacheKey = `mirror:${chapter.id}:${i}`;
-              const cached = imageCache.get(cacheKey);
-              img = cached ? { buf: cached, type: 'image/jpeg' } : await mirrorManga.fetchMirrorImage(mirrorUrl);
-              if (img && img.buf) imageCache.set(cacheKey, img.buf);
-            }
+            const cacheKey = `mirror:${chapter.id}:${i}`;
+            const cached = imageCache.get(cacheKey);
+            img = cached ? { buf: cached, type: 'image/jpeg' } : await mirrorManga.fetchMirrorImage(mirrorUrl);
+            if (img && img.buf) imageCache.set(cacheKey, img.buf);
           } catch {
             /* skip */
           }
         }
       }
+      return img;
+    };
+    const results = new Array(pages.length).fill(null);
+    let nextIdx = 0;
+    async function worker() {
+      while (nextIdx < pages.length) {
+        const i = nextIdx++;
+        results[i] = await fetchPage(i);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(5, pages.length) }, () => worker()));
+    const entries = [];
+    let failed = 0;
+    for (let i = 0; i < results.length; i++) {
+      const img = results[i];
       if (img) {
         const ext = (img.type || '').includes('png') ? 'png' : 'jpg';
         entries.push({ name: `page-${pad(i)}.${ext}`, buf: img.buf });
@@ -246,11 +266,11 @@ router.get('/chapters/:chapterId/download', requireAuth, async (req, res, next) 
 });
 
 // Global concurrency gate for upstream image fetches: MangaDex at-home
-// servers rate-limit per IP, so we serialize bursts (max 3 in flight).
+// servers rate-limit per IP, so we serialize bursts (max 5 in flight).
 let inflight = 0;
 const waiters = [];
 async function acquire() {
-  if (inflight < 3) {
+  if (inflight < 5) {
     inflight += 1;
     return;
   }
@@ -317,8 +337,11 @@ async function fetchUpstream(url, quick = false) {
  *  Sends the MangaDex-required headers: browser-like User-Agent and
  *  Referer: https://mangadex.org/. Rejects non-image responses (MangaDex's
  *  CDN answers 200 with an HTML rate-limit page when an IP is throttled —
- *  serving that HTML as an image must never happen). */
+ *  serving that HTML as an image must never happen). A hard timeout keeps
+ *  blackholed hosts (firewalled IPs) from hanging the pipeline. */
 async function attemptFetch(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
   try {
     const upstream = await fetch(url, {
       headers: {
@@ -326,6 +349,7 @@ async function attemptFetch(url) {
         Referer: config.mangadex.imageReferer,
       },
       redirect: 'follow',
+      signal: controller.signal,
     });
     if (upstream.ok) {
       const ct = (upstream.headers.get('content-type') || '').toLowerCase();
@@ -338,6 +362,8 @@ async function attemptFetch(url) {
     return { status: upstream.status };
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

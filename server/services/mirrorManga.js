@@ -114,10 +114,13 @@ async function getChapterImages(chapterId) {
 
 /** Fetch a mirror image with the CDN-required headers. */
 async function fetchMirrorImage(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
   try {
     const res = await fetch(url, {
       headers: { 'User-Agent': UA, Referer: 'https://mangapill.com/' },
       redirect: 'follow',
+      signal: controller.signal,
     });
     if (!res.ok) return null;
     const ct = (res.headers.get('content-type') || '').toLowerCase();
@@ -127,6 +130,8 @@ async function fetchMirrorImage(url) {
     return { buf, type: ct || 'image/jpeg' };
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

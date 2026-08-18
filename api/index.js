@@ -5,3 +5,5 @@
  */
 const { app } = require('../server/index');
 module.exports = app;
+// ZIP downloads fetch many upstream images — allow the full 60s budget.
+module.exports.config = { maxDuration: 60 };
